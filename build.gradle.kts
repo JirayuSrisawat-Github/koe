@@ -23,16 +23,8 @@ subprojects {
 
     repositories {
         mavenLocal()
-
-        mavenCentral()
         maven {
-            url = uri("https://maven.lavalink.dev/releases")
-        }
-        maven {
-            url = uri("https://maven.lavalink.dev/snapshots")
-        }
-        maven {
-            url = uri("https://jitpack.io/")
+            url = uri("https://maven.jirayu.net/repository/central")
         }
     }
     if (name != "testbot") {
@@ -45,10 +37,7 @@ subprojects {
                     val mavenPassword = findProperty("MAVEN_PASSWORD") as String?
                     if (!mavenUsername.isNullOrEmpty() && !mavenPassword.isNullOrEmpty()) {
                         repositories {
-                            val snapshots = "https://maven.lavalink.dev/snapshots"
-                            val releases = "https://maven.lavalink.dev/releases"
-
-                            maven(if (gitVersionInfo.isCommitHash) snapshots else releases) {
+                            maven("https://maven.jirayu.net/repository/central") {
                                 credentials {
                                     username = mavenUsername
                                     password = mavenPassword
@@ -56,7 +45,7 @@ subprojects {
                             }
                         }
                     } else {
-                        logger.lifecycle("Not publishing to maven.lavalink.dev because credentials are not set")
+                        logger.lifecycle("Not publishing to maven.jirayu.net because credentials are not set")
                     }
                 }
 

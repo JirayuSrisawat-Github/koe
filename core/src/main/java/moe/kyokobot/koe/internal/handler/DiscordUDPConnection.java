@@ -132,9 +132,21 @@ public class DiscordUDPConnection implements Closeable, ConnectionHandler<InetSo
         buf.clear();
         var dave = connection.getDAVEManager();
         if (dave != null) {
-            inputBuffer = allocator.buffer();
-            var result = dave.encrypt(mediaType, ssrc, inputBuffer, data, len);
+            ByteBuf directData = data;
+            boolean copiedInput = false;
+            if (!data.hasMemoryAddress()) {
+                directData = allocator.directBuffer(len);
+                directData.writeBytes(data, data.readerIndex(), len);
+                copiedInput = true;
+            }
+
+            inputBuffer = allocator.directBuffer(dave.getMaxCiphertextByteSize(mediaType, len));
+            var result = dave.encrypt(mediaType, ssrc, inputBuffer, directData, len);
             inputLen = inputBuffer.readableBytes();
+
+            if (copiedInput) {
+                directData.release();
+            }
 
             if (result < 0) {
                 logger.debug("DAVE encryption failed with code {}", result);
