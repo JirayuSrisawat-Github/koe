@@ -37,9 +37,12 @@ public class DiscordUDPConnection implements Closeable, ConnectionHandler<InetSo
     private final Bootstrap bootstrap;
     private final int ssrc;
 
+    private static final int DAVE_BUFFER_INIT_CAPACITY = 512;
+
     private EncryptionMode encryptionMode;
     private DatagramChannel channel;
     private byte[] secretKey;
+    private ByteBuf daveEncryptBuf;
 
     private char seq;
 
@@ -72,6 +75,10 @@ public class DiscordUDPConnection implements Closeable, ConnectionHandler<InetSo
 
     @Override
     public void close() {
+        if (daveEncryptBuf != null) {
+            daveEncryptBuf.release();
+            daveEncryptBuf = null;
+        }
         if (channel != null && channel.isOpen()) {
             channel.close();
         }
@@ -140,7 +147,15 @@ public class DiscordUDPConnection implements Closeable, ConnectionHandler<InetSo
                 copiedInput = true;
             }
 
-            inputBuffer = allocator.directBuffer(dave.getMaxCiphertextByteSize(mediaType, len));
+            int requiredCapacity = dave.getMaxCiphertextByteSize(mediaType, len);
+            if (daveEncryptBuf == null) {
+                daveEncryptBuf = allocator.directBuffer(requiredCapacity);
+            } else {
+                daveEncryptBuf.clear();
+                daveEncryptBuf.ensureWritable(requiredCapacity);
+            }
+
+            inputBuffer = daveEncryptBuf;
             var result = dave.encrypt(mediaType, ssrc, inputBuffer, directData, len);
             inputLen = inputBuffer.readableBytes();
 
@@ -152,7 +167,6 @@ public class DiscordUDPConnection implements Closeable, ConnectionHandler<InetSo
                 logger.debug("DAVE encryption failed with code {}", result);
 
                 buf.release();
-                inputBuffer.release();
                 return null;
             }
         } else {
@@ -160,14 +174,18 @@ public class DiscordUDPConnection implements Closeable, ConnectionHandler<InetSo
         }
 
         RTPHeaderWriter.writeV2(buf, payloadType, nextSeq(), timestamp, ssrc, extension);
+        boolean isReusedBuf = inputBuffer == daveEncryptBuf;
         if (encryptionMode.box(inputBuffer, inputLen, buf, secretKey)) {
-            inputBuffer.release();
+            if (!isReusedBuf) {
+                inputBuffer.release();
+            }
             return buf;
         } else {
             logger.debug("Encryption failed!");
             buf.release();
-            inputBuffer.release();
-            // TODO: handle failed encryption?
+            if (!isReusedBuf) {
+                inputBuffer.release();
+            }
         }
 
         return null;

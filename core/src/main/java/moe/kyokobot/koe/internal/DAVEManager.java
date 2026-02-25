@@ -68,7 +68,6 @@ public class DAVEManager implements AutoCloseable {
 
     public void addUser(String userId) {
         recognizedUserIds.add(userId);
-        setupKeyRatchetForUser(userId, currentProtocolVersion);
     }
 
     public void removeUser(String userId) {
@@ -188,35 +187,17 @@ public class DAVEManager implements AutoCloseable {
         }
     }
 
-    private void setupKeyRatchetForUser(String uid, int protocolVersion) {
-        var keyRatchet = makeKeyRatchetForUser(uid, protocolVersion);
-        if (selfUserIdString.equals(uid)) {
-            setSelfKeyRatchet(keyRatchet);
-        } else if (keyRatchet != null) {
-            keyRatchet.close();
+    private void setupSelfKeyRatchet(int protocolVersion) {
+        KeyRatchet keyRatchet = null;
+        if (protocolVersion != 0) {
+            keyRatchet = daveSession.getKeyRatchet(selfUserIdString);
         }
-    }
-
-    @Nullable
-    private KeyRatchet makeKeyRatchetForUser(String uid, int protocolVersion) {
-        if (protocolVersion == 0) {
-            return null;
-        }
-
-        return daveSession.getKeyRatchet(uid);
+        setSelfKeyRatchet(keyRatchet);
     }
 
     private void prepareRatchets(int transitionId, int protocolVersion) {
-        for (var uid : recognizedUserIds) {
-            if (selfUserIdString.equals(uid)) {
-                continue;
-            }
-
-            setupKeyRatchetForUser(uid, protocolVersion);
-        }
-
         if (transitionId == INIT_TRANSITION_ID) {
-            setupKeyRatchetForUser(selfUserIdString, protocolVersion);
+            setupSelfKeyRatchet(protocolVersion);
         } else {
             pendingTransitions.put(transitionId, protocolVersion);
         }
@@ -234,7 +215,7 @@ public class DAVEManager implements AutoCloseable {
             daveSession.reset();
         }
 
-        setupKeyRatchetForUser(selfUserIdString, protocolVersion);
+        setupSelfKeyRatchet(protocolVersion);
         logger.debug("Transition executed: ID={}, Protocol version={}", transitionId, protocolVersion);
     }
 
@@ -303,29 +284,17 @@ public class DAVEManager implements AutoCloseable {
         }
 
         this.selfKeyRatchet = selfKeyRatchet;
-        this.reinitSelfEncryptor();
-
-        if (this.selfKeyRatchet == null) {
-            this.selfEncryptor.setPassthroughMode(true);
-        } else {
-            this.selfEncryptor.setKeyRatchet(selfKeyRatchet);
-            this.selfEncryptor.setPassthroughMode(false);
-        }
-    }
-
-    private void reinitSelfEncryptor() {
-        var oldEncryptor = this.selfEncryptor;
-        var newEncryptor = factory.fromEncryptor(factory.createEncryptor());
 
         encryptorLock.writeLock().lock();
         try {
-            this.selfEncryptor = newEncryptor;
+            if (selfKeyRatchet == null) {
+                this.selfEncryptor.setPassthroughMode(true);
+            } else {
+                this.selfEncryptor.setKeyRatchet(selfKeyRatchet);
+                this.selfEncryptor.setPassthroughMode(false);
+            }
         } finally {
             encryptorLock.writeLock().unlock();
-        }
-
-        if (oldEncryptor != null) {
-            oldEncryptor.close();
         }
     }
 }
