@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class DAVEManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(DAVEManager.class);
@@ -27,8 +28,9 @@ public class DAVEManager implements AutoCloseable {
     private final Set<String> recognizedUserIds = ConcurrentHashMap.newKeySet();
     private final Map<Integer, Integer> pendingTransitions = new ConcurrentHashMap<>();
     private final int maxProtocolVersion;
+    private final ReentrantReadWriteLock encryptorLock = new ReentrantReadWriteLock();
 
-    private NettyEncryptor selfEncryptor;
+    private volatile NettyEncryptor selfEncryptor;
     private @Nullable KeyRatchet selfKeyRatchet = null;
     private String selfUserIdString;
     private long mlsGroupId = 0;
@@ -50,7 +52,12 @@ public class DAVEManager implements AutoCloseable {
     }
 
     public int getMaxCiphertextByteSize(MediaType mediaType, int frameSize) {
-        return selfEncryptor.getMaxCiphertextByteSize(mediaType, frameSize);
+        encryptorLock.readLock().lock();
+        try {
+            return selfEncryptor.getMaxCiphertextByteSize(mediaType, frameSize);
+        } finally {
+            encryptorLock.readLock().unlock();
+        }
     }
 
     public void addUsers(Iterable<String> userIds) {
@@ -83,8 +90,14 @@ public class DAVEManager implements AutoCloseable {
             }
         }
 
-        output.ensureWritable(this.selfEncryptor.getMaxCiphertextByteSize(mediaType, size));
-        return this.selfEncryptor.encrypt(mediaType, ssrc, input, output);
+        encryptorLock.readLock().lock();
+        try {
+            var encryptor = this.selfEncryptor;
+            output.ensureWritable(encryptor.getMaxCiphertextByteSize(mediaType, size));
+            return encryptor.encrypt(mediaType, ssrc, input, output);
+        } finally {
+            encryptorLock.readLock().unlock();
+        }
     }
 
     public void handleSessionDescription(@NotNull JsonObject session, long mlsGroupId) {
@@ -265,7 +278,12 @@ public class DAVEManager implements AutoCloseable {
             selfKeyRatchet.close();
             selfKeyRatchet = null;
         }
-        selfEncryptor.close();
+        encryptorLock.writeLock().lock();
+        try {
+            selfEncryptor.close();
+        } finally {
+            encryptorLock.writeLock().unlock();
+        }
     }
 
     private String[] recognizedUserIdArray() {
@@ -296,10 +314,18 @@ public class DAVEManager implements AutoCloseable {
     }
 
     private void reinitSelfEncryptor() {
-        if (this.selfEncryptor != null) {
-            this.selfEncryptor.close();
+        var oldEncryptor = this.selfEncryptor;
+        var newEncryptor = factory.fromEncryptor(factory.createEncryptor());
+
+        encryptorLock.writeLock().lock();
+        try {
+            this.selfEncryptor = newEncryptor;
+        } finally {
+            encryptorLock.writeLock().unlock();
         }
 
-        this.selfEncryptor = factory.fromEncryptor(factory.createEncryptor());
+        if (oldEncryptor != null) {
+            oldEncryptor.close();
+        }
     }
 }
